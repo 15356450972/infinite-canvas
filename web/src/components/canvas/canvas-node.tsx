@@ -449,6 +449,7 @@ export const CanvasNode = React.memo(function CanvasNode({
 
 function NodeContent(props: NodeContentRendererProps) {
     if (props.node.type === CanvasNodeType.Config && props.renderNodeContent) return props.renderNodeContent(props.node);
+    if (props.node.metadata?.status === "loading" && !props.isBatchRoot) return <LoadingContent theme={props.theme} />;
     if (props.isBatchRoot && props.node.type === CanvasNodeType.Image) return <ImageNodeContent {...props} />;
     if (props.node.type === CanvasNodeType.Text && props.node.metadata?.texts?.length && (props.node.metadata.status !== "error" || props.node.metadata.texts.some((text) => text.content))) return <TextContent {...props} />;
     if (props.node.metadata?.status === "loading") return <LoadingContent theme={props.theme} />;
@@ -504,7 +505,7 @@ function ErrorContent({ node, theme, onRetry }: Pick<NodeContentRendererProps, "
     const { t } = useTranslation();
     return (
         <div className="flex max-w-[260px] flex-col items-center gap-3 px-5 text-center">
-            <div className="text-xs leading-5 text-red-300">{node.metadata?.errorDetails || t("canvas.node.failed")}</div>
+            <div className="text-xs leading-5 text-red-300">{node.metadata?.images?.find((image) => image.errorDetails)?.errorDetails || node.metadata?.errorDetails || t("canvas.node.failed")}</div>
             <button
                 type="button"
                 className="inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-xs font-medium transition hover:scale-[1.02]"
@@ -694,8 +695,26 @@ function EmptyImageContent({ theme }: NodeContentRendererProps) {
     );
 }
 
+// A media element that leaves the document is only paused after the browser reaches a stable state, and
+// that behaviour is engine dependent, so a removed node can keep playing its audio. Hold a direct
+// reference to the element and stop it explicitly when the node unmounts.
+function useStopMediaOnUnmount<T extends HTMLMediaElement>() {
+    const elementRef = useRef<T | null>(null);
+    useEffect(
+        () => () => {
+            elementRef.current?.pause();
+        },
+        [],
+    );
+    // Ignore the null React passes when detaching the ref, so the element stays reachable in the cleanup.
+    return useCallback((element: T | null) => {
+        if (element) elementRef.current = element;
+    }, []);
+}
+
 function VideoNodeContent({ node, theme }: NodeContentRendererProps) {
     const { t } = useTranslation();
+    const mediaRef = useStopMediaOnUnmount<HTMLVideoElement>();
     if (!node.metadata?.content)
         return (
             <div className="flex h-full w-full flex-col items-center justify-center gap-3" style={{ color: theme.node.placeholder }}>
@@ -703,11 +722,12 @@ function VideoNodeContent({ node, theme }: NodeContentRendererProps) {
                 <span className="text-sm">{t("canvas.node.emptyVideo")}</span>
             </div>
         );
-    return <video src={node.metadata.content} controls className="h-full w-full rounded-[18px] bg-black object-contain" data-canvas-video={node.id} data-canvas-no-zoom />;
+    return <video ref={mediaRef} src={node.metadata.content} controls className="h-full w-full rounded-[18px] bg-black object-contain" data-canvas-video={node.id} data-canvas-no-zoom />;
 }
 
 function AudioNodeContent({ node, theme }: NodeContentRendererProps) {
     const { t } = useTranslation();
+    const mediaRef = useStopMediaOnUnmount<HTMLAudioElement>();
     if (!node.metadata?.content)
         return (
             <div className="flex h-full w-full flex-col items-center justify-center gap-2" style={{ color: theme.node.placeholder }}>
@@ -721,7 +741,7 @@ function AudioNodeContent({ node, theme }: NodeContentRendererProps) {
                 <Music2 className="size-4 shrink-0" />
                 <span className="truncate">{t("canvas.node.audio")}</span>
             </div>
-            <audio src={node.metadata.content} controls className="w-full" data-canvas-no-zoom />
+            <audio ref={mediaRef} src={node.metadata.content} controls className="w-full" data-canvas-audio={node.id} data-canvas-no-zoom />
         </div>
     );
 }

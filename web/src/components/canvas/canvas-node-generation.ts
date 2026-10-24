@@ -170,8 +170,29 @@ export function buildNodeResponseMessages(context: NodeGenerationContext): AiTex
 }
 
 export async function hydrateNodeGenerationContext(context: NodeGenerationContext) {
-    const { imageToDataUrl } = await import("@/services/image-storage");
-    return { ...context, referenceImages: await Promise.all(context.referenceImages.map(async (image) => ({ ...image, dataUrl: await imageToDataUrl(image) }))) };
+    const { imageToDataUrl, uploadImage } = await import("@/services/image-storage");
+    const { isEphemeralMediaUrl, isStablePublicUrl } = await import("@/lib/media-url");
+    return {
+        ...context,
+        referenceImages: await Promise.all(
+            context.referenceImages.map(async (image) => {
+                const stable = isStablePublicUrl(image.publicUrl) || isStablePublicUrl(image.url) || isStablePublicUrl(image.dataUrl);
+                if (stable) return { ...image, dataUrl: stable, url: stable, publicUrl: stable };
+                if (image.storageKey) return { ...image, dataUrl: await imageToDataUrl(image) };
+                const remote = image.dataUrl || image.url || "";
+                if (isEphemeralMediaUrl(remote)) {
+                    try {
+                        const uploaded = await uploadImage(remote);
+                        if (uploaded.storageKey) return { ...image, dataUrl: uploaded.url, storageKey: uploaded.storageKey };
+                    } catch {
+                        /* keep the original reference; public upload will report a clear error */
+                    }
+                    return image;
+                }
+                return { ...image, dataUrl: await imageToDataUrl(image) };
+            }),
+        ),
+    };
 }
 
 function readNodeTextInput(node: CanvasNodeData) {
@@ -197,7 +218,10 @@ function readReferenceImage(node: CanvasNodeData): ReferenceImage | null {
         name: `${node.title || node.id}.png`,
         type: node.metadata.mimeType || "image/png",
         dataUrl: node.metadata.content,
+        url: node.metadata.publicUrl,
+        publicUrl: node.metadata.publicUrl,
         storageKey: node.metadata.storageKey,
+        taskId: node.metadata.imageTaskId || node.metadata.images?.[0]?.taskId,
     };
 }
 

@@ -1,5 +1,7 @@
 import { defaultConfig, resolveModelForCapability, type AiConfig } from "@/stores/use-config-store";
 import i18n from "@/i18n";
+import { fetchMiaowuTaskBlob } from "@/services/api/image";
+import { persistGeneratedImage } from "@/services/public-upload";
 import { resolveImageUrl, uploadImage } from "@/services/image-storage";
 import { resolveMediaUrl } from "@/services/file-storage";
 import { imageMetadata, referenceUrl } from "@/lib/canvas/canvas-node-factory";
@@ -30,11 +32,24 @@ export function generationReferenceUrls(context: { referenceImages: ReferenceIma
     ];
 }
 
-export async function resolveMetadataReferences(metadata: CanvasNodeMetadata) {
+export async function resolveMetadataReferences(metadata: CanvasNodeMetadata, nodes: CanvasNodeData[] = []) {
     if (metadata.generationType !== "edit") return [];
     if (!metadata.references?.length) return null;
     const references = await Promise.all(
         metadata.references.map(async (url, index) => {
+            const node = nodes.find((item) => item.metadata?.content === url || item.metadata?.storageKey === url || item.metadata?.images?.some((image) => image.content === url || image.storageKey === url));
+            if (node?.metadata) {
+                return {
+                    id: node.id,
+                    name: `reference-${index}.png`,
+                    type: node.metadata.mimeType || "image/png",
+                    dataUrl: node.metadata.content || url,
+                    url: node.metadata.publicUrl,
+                    publicUrl: node.metadata.publicUrl,
+                    storageKey: node.metadata.storageKey,
+                    taskId: canvasNodeTaskId(node),
+                } satisfies ReferenceImage;
+            }
             const dataUrl = url.startsWith("image:") ? await resolveImageUrl(url, "") : url;
             return dataUrl ? { id: `${index}`, name: `reference-${index}.png`, type: "image/png", dataUrl, storageKey: url.startsWith("image:") ? url : undefined } : null;
         }),
@@ -42,7 +57,7 @@ export async function resolveMetadataReferences(metadata: CanvasNodeMetadata) {
     return references.every(Boolean) ? (references as ReferenceImage[]) : null;
 }
 
-export async function hydrateCanvasImages(nodes: CanvasNodeData[]) {
+export async function hydrateCanvasImages(nodes: CanvasNodeData[], config?: Pick<AiConfig, "apiKey">) {
     return Promise.all(
         nodes.map(async (node) => {
             const metadata = node.metadata;
@@ -51,8 +66,26 @@ export async function hydrateCanvasImages(nodes: CanvasNodeData[]) {
             if (node.type !== CanvasNodeType.Image || !metadata || !content) return node;
             const images = await Promise.all((metadata.images || []).map(async (image) => (image.content ? { ...image, content: await resolveImageUrl(image.storageKey, image.content) } : image)));
             if (metadata.storageKey) return { ...node, metadata: { ...metadata, content: await resolveImageUrl(metadata.storageKey, content), images } };
-            if (!content.startsWith("data:image/")) return node;
-            return { ...node, metadata: { ...metadata, ...imageMetadata(await uploadImage(content)) } };
+            const taskId = canvasNodeTaskId(node);
+            if (taskId && config?.apiKey) {
+                try {
+                    const uploaded = await persistGeneratedImage(await fetchMiaowuTaskBlob(config, taskId));
+                    if (uploaded.storageKey) {
+                        const nextImages = images.map((image) => (image.id === metadata.primaryImageId || (!metadata.primaryImageId && image === images[0]) ? { ...image, content: uploaded.url, storageKey: uploaded.storageKey, publicUrl: uploaded.publicUrl, bytes: uploaded.bytes, mimeType: uploaded.mimeType || image.mimeType } : image));
+                        return { ...node, metadata: { ...metadata, ...imageMetadata(uploaded, taskId), images: nextImages } };
+                    }
+                } catch {
+                    /* fall through to remote persist */
+                }
+            }
+            if (!content.startsWith("data:image/") && !/^https?:\/\//i.test(content)) return { ...node, metadata: { ...metadata, images } };
+            try {
+                const uploaded = await uploadImage(content);
+                if (!uploaded.storageKey) return { ...node, metadata: { ...metadata, images } };
+                return { ...node, metadata: { ...metadata, ...imageMetadata(uploaded), images } };
+            } catch {
+                return { ...node, metadata: { ...metadata, images } };
+            }
         }),
     );
 }
@@ -114,6 +147,23 @@ export function buildGenerationConfig(config: AiConfig, node: CanvasNodeData | u
     };
 }
 
+export function canvasNodeTaskId(node?: CanvasNodeData | null) {
+    if (!node?.metadata) return undefined;
+    const primary = node.metadata.images?.find((image) => image.id === node.metadata?.primaryImageId) || node.metadata.images?.[0];
+    return node.metadata.videoTaskId || node.metadata.imageTaskId || primary?.taskId || undefined;
+}
+
+export function withImageTaskMetadata(metadata: CanvasNodeMetadata, taskId?: string, imageId?: string): CanvasNodeMetadata {
+    if (!taskId) return metadata;
+    const images = metadata.images?.map((image) => (imageId && image.id === imageId ? { ...image, taskId } : image));
+    const shouldSetPrimary = !imageId || !metadata.primaryImageId || metadata.primaryImageId === imageId;
+    return {
+        ...metadata,
+        ...(images ? { images } : {}),
+        ...(shouldSetPrimary ? { imageTaskId: taskId } : {}),
+    };
+}
+
 export function hasResumableVideoTask(node: CanvasNodeData) {
     return node.type === CanvasNodeType.Video && Boolean(node.metadata?.videoTaskId) && !node.metadata?.content;
 }
@@ -163,7 +213,10 @@ export function sourceNodeReferenceImages(node: CanvasNodeData | null) {
             name: `${node.title || node.id}.png`,
             type: node.metadata.mimeType || "image/png",
             dataUrl: node.metadata.content,
+            url: node.metadata.publicUrl,
+            publicUrl: node.metadata.publicUrl,
             storageKey: node.metadata.storageKey,
+            taskId: canvasNodeTaskId(node),
         },
     ];
 }

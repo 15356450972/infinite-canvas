@@ -2,11 +2,12 @@ import localforage from "localforage";
 
 import { nanoid } from "nanoid";
 import i18n from "@/i18n";
-import { withLocalProxy } from "@/stores/use-config-store";
+import { fetchableMediaUrl } from "@/lib/media-url";
 
 export type UploadedImage = {
     url: string;
     storageKey?: string;
+    publicUrl?: string;
     width: number;
     height: number;
     bytes: number;
@@ -69,7 +70,7 @@ async function fetchImageBlob(url: string, options?: ImageReadOptions) {
         controller.abort();
     }, IMAGE_DOWNLOAD_TIMEOUT_MS);
     try {
-        const response = await fetch(withLocalProxy(url), { signal: controller.signal });
+        const response = await fetch(fetchableMediaUrl(url), { signal: controller.signal });
         if (!response.ok) throw namedError(IMAGE_RESPONSE_ERROR);
         return await response.blob();
     } catch (error) {

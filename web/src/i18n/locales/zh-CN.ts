@@ -1,7 +1,7 @@
 export default {
     meta: {
-        title: "无限画布",
-        description: "一个无限画布创作工具",
+        title: "喵呜画布",
+        description: "一个喵呜画布创作工具",
     },
     theme: { toggle: "切换主题" },
     common: {
@@ -55,7 +55,7 @@ export default {
             anyModel: "（当前选中的模型）",
         },
     },
-    apiErrors: { requestFailed: "请求失败", requestCanceled: "请求已取消", baseUrlRequired: "请先配置 Base URL", apiKeyRequired: "请先配置 API Key", authenticationFailed: "鉴权失败，请检查 API Key、套餐权限或模型权限", rateLimited: "请求被限流或额度不足，请稍后重试", notFound: "接口地址不存在（404），请检查 Base URL 和模型选择", badGateway: "网关错误（502），接口服务暂时不可用，请稍后重试", serviceBusy: "服务繁忙（503），请稍后重试", httpFailed: "请求失败（HTTP {{status}}），请检查 Base URL 和 API Key 是否正确", htmlError: "服务返回了 HTML 错误页面（{{preview}}）", audioModelRequired: "请先配置音频模型", audioGenerationFailed: "音频生成失败", scriptNoAudio: "模型调用脚本没有返回音频", geminiAudioUnsupported: "Gemini 调用格式暂不支持音频生成，请使用 OpenAI 格式渠道", invalidImageSizeFormat: "图像尺寸格式不支持，请使用 auto、9:16 或 1024x1024", positiveImageRatio: "图像比例必须是正数，例如 9:16", imageRatioLimit: "图像宽高比不能超过 3:1，请调整尺寸", positiveImageDimensions: "图像尺寸必须是正整数，例如 1024x1024", imageDimensionStep: "图像尺寸的宽高必须是 16 的倍数，请调整尺寸", imageEdgeLimit: "图像尺寸最长边不能超过 3840px，请调整尺寸", imagePixelLimit: "图像总像素需在 655360 到 8294400 之间，请调整尺寸", unknownImageResponse: "接口返回了未知格式的数据（字段：{{fields}}），请检查模型或接口兼容性", noImageReturned: "接口没有返回图片，请检查提示词是否触发安全审核或模型是否支持该操作", geminiRejected: "Gemini 拒绝了本次请求：{{reason}}", geminiNoImage: "Gemini 接口没有返回图片", maskModelUnsupported: "蒙版编辑暂不支持该模型，请使用其他渠道", noContent: "没有返回内容", modelReadFailed: "读取模型失败", videoTimeout: "{{provider}}视频生成超时，请稍后重试", pluginVideoExpired: "插件视频任务已失效，请重新生成", scriptNoVideo: "模型调用脚本没有返回视频", noPlayableVideo: "视频接口没有返回可播放的视频", noVideoTaskId: "视频接口没有返回任务 ID", videoTaskCreateFailed: "视频任务创建失败", videoGenerationFailed: "视频生成失败", videoTaskQueryFailed: "视频任务查询失败", videoPromptRequired: "请输入视频提示词，或连接参考图片/视频/音频", referenceImageReadFailed: "参考图读取失败，请换一张图片或重新上传", invalidReferenceVideo: "参考视频必须是公网 URL、资产 ID，或本地已保存的视频", invalidReferenceAudio: "参考音频必须是公网 URL、资产 ID，或本地已保存的音频", videoModelRequired: "请先配置视频模型", geminiVideoUnsupported: "Gemini 调用格式暂不支持视频生成，请使用 OpenAI 格式渠道", noVideoTask: "接口没有返回视频任务", videoDownloadFailed: "视频下载失败", localAssetReadFailed: "读取本地资产失败" },
+    apiErrors: { requestFailed: "请求失败", requestCanceled: "请求已取消", baseUrlRequired: "请先配置 Base URL", apiKeyRequired: "请先配置 API Key", authenticationFailed: "鉴权失败，请检查 API Key、套餐权限或模型权限", rateLimited: "请求被限流或额度不足，请稍后重试", notFound: "接口地址不存在（404），请检查 Base URL 和模型选择", badGateway: "网关错误（502），接口服务暂时不可用，请稍后重试", serviceBusy: "服务繁忙（503），请稍后重试", httpFailed: "请求失败（HTTP {{status}}），请检查 Base URL 和 API Key 是否正确", htmlError: "服务返回了 HTML 错误页面（{{preview}}）", audioModelRequired: "请先配置音频模型", audioGenerationFailed: "音频生成失败", scriptNoAudio: "模型调用脚本没有返回音频", geminiAudioUnsupported: "Gemini 调用格式暂不支持音频生成，请使用 OpenAI 格式渠道", invalidImageSizeFormat: "图像尺寸格式不支持，请使用 auto、9:16 或 1024x1024", positiveImageRatio: "图像比例必须是正数，例如 9:16", imageRatioLimit: "图像宽高比不能超过 3:1，请调整尺寸", positiveImageDimensions: "图像尺寸必须是正整数，例如 1024x1024", imageDimensionStep: "图像尺寸的宽高必须是 16 的倍数，请调整尺寸", imageEdgeLimit: "图像尺寸最长边不能超过 3840px，请调整尺寸", imagePixelLimit: "图像总像素需在 655360 到 8294400 之间，请调整尺寸", unknownImageResponse: "接口返回了未知格式的数据（字段：{{fields}}），请检查模型或接口兼容性", noImageReturned: "接口没有返回图片，请检查提示词是否触发安全审核或模型是否支持该操作", imagePublicUrlRequired: "该生图接口只接受公网 http(s) 参考图地址，不支持本地文件上传。请去掉本地参考图，或改用接口能访问的图片 URL", imageTimeout: "图片生成超时，请稍后重试", noImageTaskId: "图片接口没有返回任务 ID", imageTaskCreateFailed: "图片任务创建失败", imageTaskQueryFailed: "图片任务查询失败", imageGenerationFailed: "图片生成失败", geminiRejected: "Gemini 拒绝了本次请求：{{reason}}", geminiNoImage: "Gemini 接口没有返回图片", maskModelUnsupported: "蒙版编辑暂不支持该模型，请使用其他渠道", noContent: "没有返回内容", modelReadFailed: "读取模型失败", videoTimeout: "{{provider}}视频生成超时，请稍后重试", pluginVideoExpired: "插件视频任务已失效，请重新生成", scriptNoVideo: "模型调用脚本没有返回视频", noPlayableVideo: "视频接口没有返回可播放的视频", noVideoTaskId: "视频接口没有返回任务 ID", videoTaskCreateFailed: "视频任务创建失败", videoGenerationFailed: "视频生成失败", videoTaskQueryFailed: "视频任务查询失败", videoPromptRequired: "请输入视频提示词，或连接参考图片/视频/音频", videoPublicUrlRequired: "该视频接口只接受公网 http(s) 参考地址，不支持本地文件上传。请去掉本地参考，或改用接口能访问的图片/视频/音频 URL", publicUploadFailed: "参考文件上传到公网失败{{message}}", publicUploadTooLarge: "参考文件超过 128MB，无法上传到临时网盘", publicUploadNoFile: "找不到可上传的参考文件", referenceUrlExpired: "参考图的临时链接已失效，上游读不到这张图。请重新生成或重新上传参考图后再试", referenceImageReadFailed: "参考图读取失败，请换一张图片或重新上传", invalidReferenceVideo: "参考视频必须是公网 URL、资产 ID，或本地已保存的视频", invalidReferenceAudio: "参考音频必须是公网 URL、资产 ID，或本地已保存的音频", videoModelRequired: "请先配置视频模型", geminiVideoUnsupported: "Gemini 调用格式暂不支持视频生成，请使用 OpenAI 格式渠道", noVideoTask: "接口没有返回视频任务", videoDownloadFailed: "视频下载失败", localAssetReadFailed: "读取本地资产失败" },
     prompts: {
         title: "提示词中心",
         library: "提示词库",
@@ -160,6 +160,12 @@ export default {
         configFirst: "请先完成配置",
         generationFailed: "生成失败",
         retrySuccess: "重试成功",
+        clearResults: "清空结果",
+        removeResult: "删除这张",
+        copyTaskId: "复制上游任务 ID",
+        taskIdCopied: "已复制上游任务 ID",
+        noTaskId: "还没有上游任务 ID",
+        historyPreview: "历史预览",
     },
     imageWorkbench: {
         title: "生图工作台",
@@ -174,6 +180,7 @@ export default {
         configIncomplete: "生图配置不完整",
         invalidParams: "生图参数无效",
         busy: "生图工作台已有任务正在运行",
+        tooManyPending: "同时生成的任务过多，最多 {{max}} 张在排队或生成中",
         generated: "图片已生成",
         addedReference: "已加入参考图",
         resultTitle: "生成结果 {{count}}",
@@ -215,9 +222,9 @@ export default {
         empty: "还没有生成视频",
     },
     canvas: {
-        defaultTitle: "无限画布 {{count}}",
+        defaultTitle: "喵呜画布 {{count}}",
         library: "画布库",
-        title: "无限画布",
+        title: "喵呜画布",
         imported: "已导入 {{count}} 个画布",
         importFailed: "导入失败，请选择有效的画布压缩包",
         opening: "正在打开画布...",
@@ -261,7 +268,7 @@ export default {
             select: "选择 {{name}}", stats: "{{nodes}} 个节点 · {{connections}} 条连线", updated: "更新于 {{date}}", saveName: "保存名称", cancelRename: "取消重命名", export: "导出", rename: "重命名", delete: "删除",
             deleteTitle: "删除画布？", deleteDescription: "将删除 {{count}} 个画布，里面的节点和连线也会一起移除。",
         },
-        export: { defaultProjectName: "无限画布", defaultNodesName: "画布元素", item: "元素" },
+        export: { defaultProjectName: "喵呜画布", defaultNodesName: "画布元素", item: "元素" },
         createMenu: {
             fromNode: "引用该节点生成", close: "关闭", text: "文本生成", textDescription: "脚本、广告词、品牌文案", image: "图片生成", video: "视频生成", audio: "音频参考", config: "配置节点", configDescription: "模型、尺寸、数量和输入顺序", select: "选择节点",
         },
@@ -278,7 +285,7 @@ export default {
         },
         assetPicker: { title: "选择资产", insert: "插入", search: "搜索资产", empty: "没有资产" },
         imageTools: { copyPrompt: "复制提示词", copyPromptTitle: "复制生成该图片的提示词", reversePrompt: "反推提示词", reversePromptTitle: "创建反推提示词的文本和配置节点", replace: "替换图片", locked: "锁比例", free: "自由比例", lockTitle: "切换为等比缩放", freeTitle: "切换为自由比例", mask: "局部编辑", maskTitle: "添加蒙版遮罩后局部修改", crop: "裁剪", cropTitle: "裁剪并生成新节点", split: "切图", splitTitle: "按行列切分图片", upscale: "放大", upscaleTitle: "放大图片分辨率", superResolve: "超分", superResolveTitle: "AI 超分", angle: "多角度", angleTitle: "生成角度", view: "查看大图", viewTitle: "查看图片详情", more: "更多", configure: "配置快捷工具", customize: "自定义工具栏", showLabels: "显示按钮文字", description: "选择你想在图片节点编辑栏中使用的快捷工具。", preview: "节点预览", imageNode: "图片节点", quickTools: "快捷工具" },
-        nodeToolbar: { noPrompt: "暂无可复制的提示词", infoTitle: "查看节点信息", info: "信息", removeTitle: "移除节点", retryTitle: "重新生成", queryVideoTask: "获取任务状态", queryVideoTaskTitle: "使用任务 ID 查询视频生成状态", videoTaskId: "任务 ID", saveAsset: "存资产", downloadAudio: "下载音频", downloadVideo: "下载视频", downloadImage: "下载图片", editTextTitle: "编辑文本", editText: "编辑文字", decreaseFont: "减小字号", increaseFont: "增大字号", zoomOut: "缩小", zoomIn: "放大", uploadImage: "上传图片", replaceVideo: "替换视频", uploadVideo: "上传视频", replaceAudio: "替换音频", uploadAudio: "上传音频", nodeInfo: "节点信息", name: "名称", type: "类型", size: "尺寸", position: "位置", status: "状态", imageGroup: "图片组", imageSize: "图片大小", group: "打组", groupTitle: "用组节点包住选中节点", ungroup: "解散组", ungroupTitle: "取消节点分组" },
+        nodeToolbar: { noPrompt: "暂无可复制的提示词", infoTitle: "查看节点信息", info: "信息", removeTitle: "移除节点", retryTitle: "重新生成", queryVideoTask: "获取任务状态", queryVideoTaskTitle: "使用任务 ID 查询视频生成状态", videoTaskId: "任务 ID", taskId: "上游任务 ID", copyTaskId: "复制上游任务 ID", saveAsset: "存资产", downloadAudio: "下载音频", downloadVideo: "下载视频", downloadImage: "下载图片", editTextTitle: "编辑文本", editText: "编辑文字", decreaseFont: "减小字号", increaseFont: "增大字号", zoomOut: "缩小", zoomIn: "放大", uploadImage: "上传图片", replaceVideo: "替换视频", uploadVideo: "上传视频", replaceAudio: "替换音频", uploadAudio: "上传音频", nodeInfo: "节点信息", name: "名称", type: "类型", size: "尺寸", position: "位置", status: "状态", imageGroup: "图片组", imageSize: "图片大小", group: "打组", groupTitle: "用组节点包住选中节点", ungroup: "解散组", ungroupTitle: "取消节点分组" },
         configNode: { title: "生成配置", image: "生图", text: "文本", video: "视频", audio: "音频", prompt: "提示词", references: "参考图", videoReferences: "参考视频", audioReferences: "参考音频", items: "{{count}} 个", images: "{{count}} 张", compose: "组装提示词", stop: "停止", generate: "开始生成" },
         projectPage: {
             stopTitle: "停止生成？", stopDescription: "当前生成请求会被中断，已经生成完成的内容会保留。", stop: "停止", continue: "继续生成", configConnection: "配置节点之间不能连接", notFound: "未找到当前画布", exporting: "正在导出当前画布…", exported: "已导出当前画布", clipboardText: "剪切板文本", clipboardImageAdded: "已从剪切板添加图片", clipboardTextAdded: "已从剪切板添加文本", noTextToSave: "没有可保存的文本", canvasText: "画布文本", noVideoToSave: "没有可保存的视频", canvasVideo: "画布视频", noImageToSave: "没有可保存的图片", canvasImage: "画布图片", emptyReverse: "图片节点为空，无法反推提示词", reverseTitle: "反推提示词", reverseConfigTitle: "反推提示词配置", splitTitle: "{{name}} {{row}}-{{column}}", splitSuccess: "已切分为 {{count}} 个子节点", maskResult: "局部编辑结果", maskFailed: "局部修改失败", generationFailed: "生成失败", partialFailed: "部分图片生成失败", partialTextFailed: "部分文本生成失败", allFailed: "全部图片生成失败", retryPromptMissing: "找不到提示词，无法重试", referenceMissing: "参考图片已丢失，无法继续重试", emptyTextImage: "文本节点为空，无法生图", untitledCanvas: "未命名画布", superResolve: "AI 超分", notImplemented: "暂未实现", imageDetails: "图片详情", clearTitle: "清空画布？", clear: "清空", clearDescription: "这会删除当前画布上的所有节点和连线。", reversePreset: "请根据参考图片反推一段适合用于 AI 生图的提示词。\n\n要求：\n1. 只输出提示词正文，不要解释。\n2. 覆盖主体、构图、风格、光线、色彩、材质、镜头和氛围。\n3. 尽量写成可直接用于生图模型的完整提示词。", maskPrompt: "参考{{source}}为原图，{{mask}}是在原图上用蓝色半透明标注出的待修改区域。请只修改蓝色标注覆盖的区域，其余区域与原图保持完全一致，输出与原图相同尺寸的完整图片，并且结果中不要保留任何蓝色标注。修改要求：{{prompt}}", maskNodeTitle: "遮罩标注", editTextPrompt: "请根据要求修改以下文本。\n\n原文：\n{{source}}\n\n修改要求：\n{{prompt}}"
@@ -346,7 +353,7 @@ export default {
     },
     home: {
         promptError: "获取提示词失败",
-        description: "在 <canvas>无限画布</canvas> 中生成、连接和重组 <content>图片、文字与图形</content>，让创作从单次生成变成连续推演。",
+        description: "在 <canvas>喵呜画布</canvas> 中生成、连接和重组 <content>图片、文字与图形</content>，让创作从单次生成变成连续推演。",
         start: "开始使用",
         openCanvas: "打开画布",
         showcaseTitle: "沉淀每一次好结果",
@@ -486,6 +493,9 @@ export default {
             modelCount: "{{count}} 个模型",
             missingUrl: "未填写接口地址",
             keepOne: "至少保留一个渠道",
+            builtIn: "固定",
+            cannotDeleteBuiltIn: "喵呜渠道为固定渠道，不能删除",
+            miaowuName: "喵呜",
             defaultName: "默认渠道",
             newName: "新渠道",
             indexedName: "渠道 {{index}}",

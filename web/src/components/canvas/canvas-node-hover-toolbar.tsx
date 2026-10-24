@@ -8,6 +8,7 @@ import { getNodeDefinition } from "@/lib/canvas/node-registry";
 import { formatBytes, getDataUrlByteSize } from "@/lib/image-utils";
 import { useCopyText } from "@/hooks/use-copy-text";
 import { useThemeStore } from "@/stores/use-theme-store";
+import { canvasNodeTaskId } from "@/lib/canvas/canvas-generation-helpers";
 import { CanvasNodeType, type CanvasNodeData, type ViewportTransform } from "@/types/canvas";
 import type { CanvasNodeToolbarItem } from "@/types/canvas-plugin";
 import { ImageToolSettingsModal, type ImageToolbarSettingsTool } from "./canvas-image-toolbar-settings-modal";
@@ -268,7 +269,7 @@ export function CanvasNodeInfoModal({ node, open, onClose }: { node: CanvasNodeD
                             <InfoRow label={t("canvas.nodeToolbar.status")} value={node.metadata?.status || "idle"} />
                             {batchCount > 1 ? <InfoRow label={t("canvas.nodeToolbar.imageGroup")} value={t("canvas.configNode.images", { count: batchCount })} /> : null}
                             {node.metadata?.prompt ? <InfoRow label={t("canvas.configNode.prompt")} value={node.metadata.prompt} /> : null}
-                            {node.metadata?.videoTaskId ? <InfoRow label={t("canvas.nodeToolbar.videoTaskId")} value={node.metadata.videoTaskId} /> : null}
+                            {canvasNodeTaskId(node) ? <InfoRow label={t("canvas.nodeToolbar.taskId")} value={canvasNodeTaskId(node)} /> : null}
                             {imageBytes ? <InfoRow label={t("canvas.nodeToolbar.imageSize")} value={formatBytes(imageBytes)} /> : null}
                             {node.metadata?.errorDetails ? (
                                 <div className="rounded-lg border p-3 text-red-400" style={{ borderColor: theme.node.stroke }}>

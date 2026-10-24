@@ -293,8 +293,12 @@ function CheckMark({ checked, theme }: { checked: boolean; theme: CanvasTheme })
 }
 
 // ---------------------------------------------------------------------------
-// Assets tab: collapsible type groups, tag filtering, and click-to-insert.
+// Assets tab: collapsible type groups, tag filtering, click-to-insert, drag-to-canvas.
 // ---------------------------------------------------------------------------
+
+// Custom drag type carrying the dragged asset id. The canvas drop handler resolves it
+// through the asset store, so large data URLs never travel inside the drag payload.
+export const ASSET_DRAG_MIME = "application/x-infinite-canvas-asset";
 
 const ASSET_GROUPS: { kind: AssetKind; icon: typeof Square }[] = [
     { kind: "image", icon: ImageIcon },
@@ -302,7 +306,7 @@ const ASSET_GROUPS: { kind: AssetKind; icon: typeof Square }[] = [
     { kind: "text", icon: FileText },
 ];
 
-function buildInsertPayload(asset: Asset): InsertAssetPayload {
+export function buildInsertPayload(asset: Asset): InsertAssetPayload {
     if (asset.kind === "text") return { kind: "text", content: asset.data.content, title: asset.title };
     if (asset.kind === "video") return { kind: "video", url: asset.data.url, storageKey: asset.data.storageKey, title: asset.title, width: asset.data.width, height: asset.data.height };
     return { kind: "image", dataUrl: asset.data.dataUrl, storageKey: asset.data.storageKey, title: asset.title };
@@ -426,7 +430,16 @@ const CanvasAssetsTab = memo(function CanvasAssetsTab({ onInsert, theme }: { onI
 function AssetCard({ asset, theme, onInsert, onRemove }: { asset: Asset; theme: CanvasTheme; onInsert: () => void; onRemove: () => void }) {
     const { t } = useTranslation();
     return (
-        <div className="group relative aspect-square overflow-hidden rounded-xl border transition duration-200 hover:-translate-y-0.5 hover:shadow-lg" style={{ borderColor: theme.node.stroke, background: theme.node.panel }}>
+        <div
+            draggable
+            onDragStart={(event) => {
+                event.dataTransfer.effectAllowed = "copy";
+                event.dataTransfer.setData(ASSET_DRAG_MIME, asset.id);
+                event.dataTransfer.setData("text/plain", asset.title);
+            }}
+            className="group relative aspect-square cursor-grab overflow-hidden rounded-xl border transition duration-200 hover:-translate-y-0.5 hover:shadow-lg active:cursor-grabbing"
+            style={{ borderColor: theme.node.stroke, background: theme.node.panel }}
+        >
             <AssetCover asset={asset} />
             <div className="absolute inset-0 flex items-center justify-center gap-2.5 opacity-0 transition duration-200 group-hover:opacity-100">
                 <button
@@ -452,12 +465,13 @@ function AssetCard({ asset, theme, onInsert, onRemove }: { asset: Asset; theme: 
 }
 
 function AssetCover({ asset }: { asset: Asset }) {
+    // draggable={false} keeps the browser's native image drag from hijacking the card's own drag payload.
     if (asset.kind === "text") return <div className="size-full overflow-hidden whitespace-pre-wrap break-words p-2.5 text-[11px] leading-snug opacity-80">{asset.data.content}</div>;
     if (asset.kind === "video") {
-        if (asset.coverUrl) return <img src={asset.coverUrl} alt="" className="size-full object-cover transition duration-300 group-hover:scale-[1.04]" />;
+        if (asset.coverUrl) return <img src={asset.coverUrl} alt="" draggable={false} className="size-full object-cover transition duration-300 group-hover:scale-[1.04]" />;
         return <video src={`${asset.data.url}#t=0.1`} muted playsInline preload="metadata" className="size-full object-cover transition duration-300 group-hover:scale-[1.04]" />;
     }
-    return <img src={asset.coverUrl || asset.data.dataUrl} alt="" className="size-full object-cover transition duration-300 group-hover:scale-[1.04]" />;
+    return <img src={asset.coverUrl || asset.data.dataUrl} alt="" draggable={false} className="size-full object-cover transition duration-300 group-hover:scale-[1.04]" />;
 }
 
 // ---------------------------------------------------------------------------

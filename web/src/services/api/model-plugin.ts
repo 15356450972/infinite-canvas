@@ -229,21 +229,21 @@ export function getPluginTemplates(): Record<ModelCapability, PluginTemplate[]> 
         {
             label: i18n.t("modelPlugin.templates.openai"),
             script: `/**
- * OpenAI image generation and editing.
- * Text-to-image uses POST /v1/images/generations (JSON) when images is empty.
- * Image editing uses POST /v1/images/edits (multipart) when images has data URLs.
+ * Dream image: POST /v1/dream/generate, then poll POST /v1/dream/query.
+ * Do not force text-to-image vs image-to-image; omit mode unless the schema requires it.
+ * Allowed params: prompt, size, ratio, image_urls, mode. References must be public http(s) URLs.
  * @param {string} prompt
- * @param {string[]} images - reference images as data URLs; empty for text-to-image
+ * @param {string[]} images - public image URLs only
  * @param {object} params
- * @param {string} params.size - output size, e.g. "1024x1024" or "auto"
- * @param {string} params.quality - "low" | "medium" | "high"
- * @param {number} params.count - number of images
- * @param {string} [params.background] - "transparent" when requested
+ * @param {string} params.size
+ * @param {string} params.quality
+ * @param {number} params.count
  * @param {string} model
  * @param {string} baseUrl
  * @param {string} apiKey
- * @param {function} request - raw HTTP helper; relative urls join baseUrl without /v1
- * @returns {Promise<string[]>} image URLs or data URLs
+ * @param {function} request
+ * @param {function} poll
+ * @returns {Promise<string[]>} image URLs
  */
 async function generateImage({
   prompt,
@@ -252,63 +252,71 @@ async function generateImage({
     size,
     quality,
     count,
-    background,
   },
   model,
   baseUrl,
   apiKey,
   request,
+  poll,
 }) {
-  if (images.length === 0) {
-    const data = await request({
+  const image_urls = (images || []).filter((src) => /^https?:\\/\\//i.test(src));
+  if ((images || []).length && image_urls.length !== images.length) {
+    throw new Error("This image API only accepts public http(s) reference URLs");
+  }
+  const q = String(quality || "").toLowerCase();
+  const mappedSize = q === "high" ? "4K" : q === "medium" || q === "hd" ? "2K" : "1080p";
+  const headers = {
+    Authorization: \`Bearer \${apiKey}\`,
+    "Content-Type": "application/json",
+  };
+  const createOne = async () => {
+    const created = await request({
       method: "post",
-      url: \`\${baseUrl}/v1/images/generations\`,
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: \`Bearer \${apiKey}\`,
-      },
+      url: \`\${baseUrl}/v1/dream/generate\`,
+      headers,
       data: {
-        model: model,
-        prompt: prompt,
-        n: count,
-        size: size,
-        quality: quality,
-        background: background,
-        response_format: "b64_json",
+        model,
+        params: {
+          prompt,
+          size: mappedSize,
+          ratio: String(size || "").includes(":") ? size : "16:9",
+          ...(image_urls.length ? { image_urls } : {}),
+        },
       },
     });
-    const urls = [];
-    for (const item of data.data || []) {
-      urls.push(item.b64_json ? \`data:image/png;base64,\${item.b64_json}\` : item.url);
-    }
-    return urls;
-  }
-
-  const form = new FormData();
-  form.set("model", model);
-  form.set("prompt", prompt);
-  form.set("n", String(count));
-  form.set("size", size);
-  form.set("quality", quality);
-  form.set("background", background);
-  form.set("response_format", "b64_json");
-  const imageField = images.length > 1 ? "image[]" : "image";
-  for (const dataUrl of images) {
-    form.append(imageField, await (await fetch(dataUrl)).blob(), "ref.png");
-  }
-  const edited = await request({
-    method: "post",
-    url: \`\${baseUrl}/v1/images/edits\`,
-    headers: {
-      Authorization: \`Bearer \${apiKey}\`,
-    },
-    data: form,
-  });
-  const urls = [];
-  for (const item of edited.data || []) {
-    urls.push(item.b64_json ? \`data:image/png;base64,\${item.b64_json}\` : item.url);
-  }
-  return urls;
+    const task = created.data || created;
+    return await poll(
+      async () => {
+        const queried = await request({
+          method: "post",
+          url: \`\${baseUrl}/v1/dream/query\`,
+          headers,
+          data: { id: task.id },
+        });
+        const state = queried.data || queried;
+        const status = String(state.status || "").toUpperCase();
+        if (status === "FAILURE" || status === "FAILED" || status === "CANCELLED") {
+          const errorMessage = typeof state.error === "string" ? state.error : state.error && state.error.message;
+          throw new Error(errorMessage || "image generation failed");
+        }
+        if (Array.isArray(state.result) && state.result[0]) return state.result[0];
+        if (state.url || state.result_url) return state.url || state.result_url;
+        if (status === "SUCCESS" || status === "COMPLETED") {
+          return await request({
+            method: "get",
+            url: \`\${baseUrl}/v1/dream/tasks/\${task.id}/content\`,
+            headers: { Authorization: \`Bearer \${apiKey}\` },
+            responseType: "blob",
+          });
+        }
+        return null;
+      },
+      (result) => result,
+      { intervalMs: 2500, timeoutMs: 300000 },
+    );
+  };
+  const n = Math.max(1, Math.min(15, Number(count) || 1));
+  return await Promise.all(Array.from({ length: n }, () => createOne()));
 }
 
 return await generateImage({
@@ -319,6 +327,7 @@ return await generateImage({
   baseUrl,
   apiKey,
   request,
+  poll,
 });`,
         },
         {
@@ -438,19 +447,19 @@ return await generateImage({
         {
             label: i18n.t("modelPlugin.templates.openai"),
             script: `/**
- * OpenAI-compatible video: POST /v1/videos (multipart), then poll GET /v1/videos/{id}.
- * Do not set Content-Type on FormData; the browser adds the boundary.
+ * OpenAI-compatible video (Dream wrapper): POST /v1/videos JSON, then poll GET /v1/videos/{id}.
+ * Allowed fields: model, prompt, seconds, ratio, resolution, image_urls, video_urls, audio_urls.
+ * size, mode, file uploads, and unknown fields return HTTP 400. References must be public http(s) URLs.
  * @param {string} prompt
- * @param {string[]} images - reference images as data URLs
- * @param {File[]} videos - reference videos; empty when none
- * @param {File[]} audios - reference audio; empty when none
+ * @param {string[]} images - public image URLs
+ * @param {File[]} videos - not used; public video URLs come from params.video_urls
+ * @param {File[]} audios - not used; public audio URLs come from params.audio_urls
  * @param {object} params
- * @param {string} params.mode - "frames" uses first/last frame fields; "reference" sends all images as references. More than 2 images become "reference".
- * @param {string|number} params.seconds - duration
- * @param {string} params.size - output size, e.g. "1280x720"
- * @param {string} params.resolution - e.g. "720p"
- * @param {boolean} params.generateAudio
- * @param {boolean} params.watermark
+ * @param {string|number} params.seconds
+ * @param {string} params.ratio
+ * @param {string} params.resolution
+ * @param {string[]} [params.video_urls]
+ * @param {string[]} [params.audio_urls]
  * @param {string} model
  * @param {string} baseUrl
  * @param {string} apiKey
@@ -464,12 +473,11 @@ async function generateVideo({
   videos,
   audios,
   params: {
-    mode,
     seconds,
-    size,
+    ratio,
     resolution,
-    generateAudio,
-    watermark,
+    video_urls,
+    audio_urls,
   },
   model,
   baseUrl,
@@ -477,42 +485,33 @@ async function generateVideo({
   request,
   poll,
 }) {
-  const form = new FormData();
-  form.set("model", model);
-  form.set("prompt", prompt);
-  form.set("seconds", String(seconds || 8));
-  form.set("size", String(size || "1280x720"));
-  form.set("resolution_name", String(resolution || "720p"));
-  form.set("generate_audio", String(generateAudio !== false));
-  form.set("watermark", String(watermark === true));
-  form.set("mode", mode);
-  if (mode === "frames") {
-    if (images[0]) {
-      form.append("first_frame", await (await fetch(images[0])).blob(), "first.png");
-    }
-    if (images[1]) {
-      form.append("last_frame", await (await fetch(images[1])).blob(), "last.png");
-    }
-  } else {
-    for (const dataUrl of images) {
-      form.append("image[]", await (await fetch(dataUrl)).blob(), "ref.png");
-    }
+  const image_urls = (images || []).filter((src) => /^https?:\\/\\//i.test(src));
+  const remote_video_urls = (video_urls || []).filter((src) => /^https?:\\/\\//i.test(src));
+  const remote_audio_urls = (audio_urls || []).filter((src) => /^https?:\\/\\//i.test(src));
+  if ((images || []).length && image_urls.length !== images.length) {
+    throw new Error("This video API only accepts public http(s) reference URLs");
   }
-  for (const file of videos) {
-    form.append("video[]", file);
+  if ((videos || []).length || (audios || []).length) {
+    throw new Error("This video API only accepts public http(s) reference URLs");
   }
-  for (const file of audios) {
-    form.append("audio[]", file);
-  }
-
   const headers = {
     Authorization: \`Bearer \${apiKey}\`,
+    "Content-Type": "application/json",
   };
   const task = await request({
     method: "post",
     url: \`\${baseUrl}/v1/videos\`,
     headers,
-    data: form,
+    data: {
+      model,
+      prompt,
+      seconds: Number(seconds) || 8,
+      ratio: ratio || "16:9",
+      resolution: resolution || "720p",
+      ...(image_urls.length ? { image_urls } : {}),
+      ...(remote_video_urls.length ? { video_urls: remote_video_urls } : {}),
+      ...(remote_audio_urls.length ? { audio_urls: remote_audio_urls } : {}),
+    },
   });
 
   return await poll(
@@ -520,10 +519,11 @@ async function generateVideo({
       const state = await request({
         method: "get",
         url: \`\${baseUrl}/v1/videos/\${task.id}\`,
-        headers,
+        headers: { Authorization: \`Bearer \${apiKey}\` },
       });
+      const errorMessage = typeof state.error === "string" ? state.error : state.error && state.error.message;
       if (state.status === "failed" || state.status === "cancelled") {
-        throw new Error(state.error && state.error.message ? state.error.message : "video generation failed");
+        throw new Error(errorMessage || "video generation failed");
       }
       if (state.video_url || state.url) {
         return { url: state.video_url || state.url };
@@ -532,7 +532,7 @@ async function generateVideo({
         return await request({
           method: "get",
           url: \`\${baseUrl}/v1/videos/\${task.id}/content\`,
-          headers,
+          headers: { Authorization: \`Bearer \${apiKey}\` },
           responseType: "blob",
         });
       }

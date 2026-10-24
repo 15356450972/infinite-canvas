@@ -2,16 +2,17 @@ import axios from "axios";
 import { nanoid } from "nanoid";
 
 import i18n from "@/i18n";
-import { dataUrlToFile, readFileAsDataUrl } from "@/lib/image-utils";
+import { readFileAsDataUrl } from "@/lib/image-utils";
 import { clampVideoSeconds, computeVideoSize, inferVideoRatio } from "@/lib/media-size";
 import { getMediaBlob, resolveMediaUrl, uploadMediaFile, type UploadedFile } from "@/services/file-storage";
 import { imageToDataUrl } from "@/services/image-storage";
-import { boolConfig, buildApiUrl, modelOptionName, resolveModelRequestConfig, resolveModelScript, withLocalProxy, type AiConfig } from "@/stores/use-config-store";
+import { resolvePublicHttpUrls } from "@/services/public-upload";
+import { boolConfig, buildApiUrl, isBuiltInChannel, modelOptionName, resolveModelRequestConfig, resolveModelScript, withLocalProxy, type AiConfig } from "@/stores/use-config-store";
 import { runModelPlugin } from "./model-plugin";
 import type { ReferenceImage } from "@/types/image";
 import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
 
-type VideoResponse = { id: string; status?: string; error?: { message?: string }; url?: string; result_url?: string; video_url?: string; content?: { video_url?: string; url?: string } | null };
+type VideoResponse = { id: string; status?: string; error?: { message?: string; code?: string } | string; url?: string; result_url?: string; video_url?: string; content?: { video_url?: string; url?: string } | null };
 type ApiVideoResponse = VideoResponse | { code?: number | string; data?: VideoResponse | null; msg?: string; message?: string; error?: { message?: string } };
 type ApiEnvelope<T> = T | { code?: number | string; data?: T | null; msg?: string; message?: string; error?: { message?: string } };
 type RequestOptions = { signal?: AbortSignal };
@@ -93,16 +94,19 @@ export async function pollVideoGenerationTask(config: AiConfig, task: VideoGener
 async function createPluginVideoTask(config: AiConfig, model: string, script: string, prompt: string, references: ReferenceImage[], options?: VideoMediaOptions): Promise<VideoGenerationTask> {
     if (!config.baseUrl.trim()) throw new Error(apiText("baseUrlRequired"));
     if (!config.apiKey.trim()) throw new Error(apiText("apiKeyRequired"));
-    const refs = await Promise.all(references.map((image) => imageToDataUrl(image)));
-    const videos = await Promise.all((options?.videos || []).map((video) => referenceMediaToFile(video, "ref.mp4", "invalidReferenceVideo", options)));
-    const audios = await Promise.all((options?.audios || []).map((audio) => referenceMediaToFile(audio, "ref.mp3", "invalidReferenceAudio", options)));
+    const miaowu = isMiaowuVideoEndpoint(config);
+    const imageUrls = miaowu ? await resolvePublicHttpUrls(references, options) : await Promise.all(references.map((image) => imageToDataUrl(image)));
+    const videoUrls = miaowu ? await resolvePublicHttpUrls(options?.videos || [], options) : [];
+    const audioUrls = miaowu ? await resolvePublicHttpUrls(options?.audios || [], options) : [];
+    const videos = miaowu ? [] : await Promise.all((options?.videos || []).map((video) => referenceMediaToFile(video, "ref.mp4", "invalidReferenceVideo", options)));
+    const audios = miaowu ? [] : await Promise.all((options?.audios || []).map((audio) => referenceMediaToFile(audio, "ref.mp3", "invalidReferenceAudio", options)));
     const result = videoPluginResult(
         await runModelPlugin({
             capability: "video",
             script,
             config,
             prompt,
-            images: refs,
+            images: imageUrls,
             videos,
             audios,
             params: {
@@ -112,7 +116,9 @@ async function createPluginVideoTask(config: AiConfig, model: string, script: st
                 ratio: videoAspectRatio(config.size),
                 generateAudio: boolConfig(config.videoGenerateAudio, true),
                 watermark: boolConfig(config.videoWatermark, false),
-                mode: resolveVideoMode(config.videoMode, refs.length),
+                mode: resolveVideoMode(config.videoMode, imageUrls.length),
+                ...(videoUrls.length ? { video_urls: videoUrls } : {}),
+                ...(audioUrls.length ? { audio_urls: audioUrls } : {}),
             },
             signal: options?.signal,
         }),
@@ -147,29 +153,22 @@ export async function storeGeneratedVideo(result: VideoGenerationResult): Promis
 }
 
 async function createOpenAIVideoTask(config: AiConfig, model: string, prompt: string, references: ReferenceImage[], options?: VideoMediaOptions): Promise<VideoGenerationTask> {
-    const images = await Promise.all(references.map(async (image) => dataUrlToFile({ ...image, dataUrl: await imageToDataUrl(image) })));
-    const videos = await Promise.all((options?.videos || []).map((video) => referenceMediaToFile(video, "ref.mp4", "invalidReferenceVideo", options)));
-    const audios = await Promise.all((options?.audios || []).map((audio) => referenceMediaToFile(audio, "ref.mp3", "invalidReferenceAudio", options)));
-    const mode = resolveVideoMode(config.videoMode, images.length);
-    const body = new FormData();
-    body.append("model", modelOptionName(model));
-    body.append("prompt", prompt);
-    body.append("seconds", normalizeVideoSeconds(config.videoSeconds));
-    body.append("size", normalizeVideoSize(config.size, config.vquality) || "1280x720");
-    body.append("resolution_name", normalizeVideoResolution(config.vquality));
-    body.append("generate_audio", String(boolConfig(config.videoGenerateAudio, true)));
-    body.append("watermark", String(boolConfig(config.videoWatermark, false)));
-    body.append("mode", mode);
-    if (mode === "frames") {
-        if (images[0]) body.append("first_frame", images[0], "first.png");
-        if (images[1]) body.append("last_frame", images[1], "last.png");
-    } else {
-        images.forEach((file) => body.append("image[]", file, "ref.png"));
-    }
-    videos.forEach((file) => body.append("video[]", file));
-    audios.forEach((file) => body.append("audio[]", file));
+    const imageUrls = await resolvePublicHttpUrls(references, options);
+    const videoUrls = await resolvePublicHttpUrls(options?.videos || [], options);
+    const audioUrls = await resolvePublicHttpUrls(options?.audios || [], options);
+    const seconds = Number(normalizeVideoSeconds(config.videoSeconds));
+    const body: Record<string, unknown> = {
+        model: modelOptionName(model),
+        prompt,
+        seconds: Number.isFinite(seconds) && seconds > 0 ? seconds : normalizeVideoSeconds(config.videoSeconds),
+        ratio: videoAspectRatio(config.size),
+        resolution: normalizeVideoResolution(config.vquality),
+    };
+    if (imageUrls.length) body.image_urls = imageUrls;
+    if (videoUrls.length) body.video_urls = videoUrls;
+    if (audioUrls.length) body.audio_urls = audioUrls;
     try {
-        const created = unwrapVideoResponse((await axios.post<ApiVideoResponse>(aiApiUrl(config, "/videos"), body, { headers: aiHeaders(config), signal: options?.signal })).data);
+        const created = unwrapVideoResponse((await axios.post<ApiVideoResponse>(aiApiUrl(config, "/videos"), body, { headers: aiHeaders(config, "application/json"), signal: options?.signal })).data);
         if (!created.id) throw new Error(apiText("noVideoTaskId"));
         return { id: created.id, provider: "openai", model };
     } catch (error) {
@@ -187,7 +186,7 @@ async function pollOpenAIVideoTask(config: AiConfig, task: VideoGenerationTask, 
             await assertVideoBlob(content.data);
             return { status: "completed", result: { blob: content.data } };
         }
-        if (video.status === "failed" || video.status === "cancelled") return { status: "failed", error: readApiErrorMessage(video.error?.message) || apiText("videoGenerationFailed") };
+        if (video.status === "failed" || video.status === "cancelled") return { status: "failed", error: readApiErrorMessage(video.error) || apiText("videoGenerationFailed") };
         return { status: "pending" };
     } catch (error) {
         throw new Error(readAxiosError(error, apiText("videoTaskQueryFailed")));
@@ -312,6 +311,10 @@ function normalizeVideoSeconds(value: string) {
 function resolveVideoMode(mode: string | undefined, imageCount: number) {
     if (mode === "reference" || imageCount > 2) return "reference";
     return "frames";
+}
+
+function isMiaowuVideoEndpoint(config: Pick<AiConfig, "baseUrl">) {
+    return isBuiltInChannel({ id: "", builtIn: false, baseUrl: config.baseUrl });
 }
 
 function normalizeVideoSize(value: string, resolution?: string) {

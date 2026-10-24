@@ -3,7 +3,7 @@ import { ListPlus, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { defaultBaseUrlForApiFormat, guessCapability, normalizeChannelModels, type ApiCallFormat, type ChannelModel, type ModelCapability, type ModelChannel } from "@/stores/use-config-store";
+import { defaultBaseUrlForApiFormat, guessCapability, isBuiltInChannel, lockBuiltInChannel, normalizeChannelModels, type ApiCallFormat, type ChannelModel, type ModelCapability, type ModelChannel } from "@/stores/use-config-store";
 import { ModelScriptEditor } from "./model-script-editor";
 import { ModelSelectModal } from "./model-select-modal";
 
@@ -34,17 +34,24 @@ export function ChannelEditorDrawer({ open, channel, onSave, onClose }: { open: 
         patch({ apiFormat, baseUrl });
     };
 
-    const applySelection = (names: string[]) => {
+    const applySelection = (names: string[], fetchedCaps: Record<string, ModelCapability> = {}) => {
         const map = new Map(draft.models.map((model) => [model.name, model]));
-        setModels(names.map((name) => map.get(name) || { name, capability: guessCapability(name) }));
+        setModels(
+            names.map((name) => {
+                const previous = map.get(name);
+                return { name, capability: fetchedCaps[name] || previous?.capability || guessCapability(name), script: previous?.script };
+            }),
+        );
     };
 
     const setCapability = (name: string, capability: ModelCapability) => setModels(draft.models.map((model) => (model.name === name ? { ...model, capability } : model)));
     const setScript = (name: string, script: string) => setModels(draft.models.map((model) => (model.name === name ? { ...model, script: script || undefined } : model)));
     const removeModel = (name: string) => setModels(draft.models.filter((model) => model.name !== name));
 
+    const locked = isBuiltInChannel(draft);
     const save = () => {
-        onSave({ ...draft, name: draft.name.trim() || t("config.channels.unnamed"), models: normalizeChannelModels(draft.models) });
+        const next = { ...draft, name: draft.name.trim() || t("config.channels.unnamed"), models: normalizeChannelModels(draft.models) };
+        onSave(locked ? lockBuiltInChannel(next) : next);
         onClose();
     };
 
@@ -67,15 +74,15 @@ export function ChannelEditorDrawer({ open, channel, onSave, onClose }: { open: 
             <div className="grid gap-4 md:grid-cols-2">
                 <label className="block">
                     <span className="mb-1 block text-sm font-medium">{t("config.channelEditor.name")}</span>
-                    <Input value={draft.name} onChange={(event) => patch({ name: event.target.value })} />
+                    <Input value={draft.name} disabled={locked} onChange={(event) => patch({ name: event.target.value })} />
                 </label>
                 <label className="block">
                     <span className="mb-1 block text-sm font-medium">{t("config.channelEditor.protocol")}</span>
-                    <Select className="w-full" value={draft.apiFormat} options={apiFormatOptions} onChange={changeApiFormat} />
+                    <Select className="w-full" value={draft.apiFormat} options={apiFormatOptions} disabled={locked} onChange={changeApiFormat} />
                 </label>
                 <label className="block md:col-span-2">
                     <span className="mb-1 block text-sm font-medium">{t("config.channelEditor.baseUrl")}</span>
-                    <Input value={draft.baseUrl} onChange={(event) => patch({ baseUrl: event.target.value })} placeholder="https://api.example.com" />
+                    <Input value={draft.baseUrl} disabled={locked} onChange={(event) => patch({ baseUrl: event.target.value })} placeholder="https://api.example.com" />
                 </label>
                 <label className="block md:col-span-2">
                     <span className="mb-1 block text-sm font-medium">API Key</span>

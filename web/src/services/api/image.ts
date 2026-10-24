@@ -1,12 +1,14 @@
 import axios from "axios";
 
 import i18n from "@/i18n";
-import { buildApiUrl, resolveModelRequestConfig, resolveModelScript, withLocalProxy, type AiConfig, type ModelChannel } from "@/stores/use-config-store";
+import { buildApiUrl, guessCapability, isBuiltInChannel, resolveModelRequestConfig, resolveModelScript, withLocalProxy, type AiConfig, type ModelCapability, type ModelChannel } from "@/stores/use-config-store";
 import { normalizePluginImages, runModelPlugin } from "./model-plugin";
 import { nanoid } from "nanoid";
 import { dataUrlToFile } from "@/lib/image-utils";
 import { buildImageReferencePromptText } from "@/lib/image-reference-prompt";
 import { imageToDataUrl } from "@/services/image-storage";
+import { fetchableMediaUrl, isEphemeralMediaUrl } from "@/lib/media-url";
+import { persistGeneratedImage, resolvePublicHttpUrl, resolvePublicHttpUrls } from "@/services/public-upload";
 import { imageSizePresets, inferMediaScale } from "@/lib/media-size";
 import type { ReferenceImage } from "@/types/image";
 
@@ -95,7 +97,8 @@ type GeminiPayload = {
     promptFeedback?: { blockReason?: string };
 };
 type GeminiStreamState = { buffer: string; text: string; toolCalls: ResponseToolCall[]; error?: string };
-type RequestOptions = { signal?: AbortSignal };
+type RequestOptions = { signal?: AbortSignal; onTaskCreated?: (taskId: string) => void; forcePublicUpload?: boolean };
+type RequestedImage = { id: string; dataUrl: string; taskId?: string };
 
 const QUALITY_BASE: Record<string, number> = {
     low: 1024,
@@ -720,7 +723,302 @@ function parseGeminiImagePayload(payload: GeminiPayload) {
     return images;
 }
 
-export async function requestGeneration(config: AiConfig, prompt: string, options?: RequestOptions) {
+type MiaowuImageTask = {
+    id?: string;
+    status?: string;
+    url?: string;
+    result_url?: string;
+    error?: { message?: string; code?: string } | string;
+};
+type MiaowuImageEnvelope = MiaowuImageTask | { code?: number | string; data?: MiaowuImageTask | null; msg?: string; message?: string; error?: { message?: string } };
+
+const MIAOWU_IMAGE_RATIOS = ["1:1", "16:9", "9:16", "4:3", "3:4", "21:9"];
+
+function isMiaowuImageEndpoint(config: Pick<AiConfig, "baseUrl">) {
+    return isBuiltInChannel({ id: "", builtIn: false, baseUrl: config.baseUrl });
+}
+
+function miaowuImageRatio(size: string) {
+    const value = size.trim();
+    if (!value || value.toLowerCase() === "auto") return "1:1";
+    if (MIAOWU_IMAGE_RATIOS.includes(value)) return value;
+    const dimensions = parseImageDimensions(value);
+    if (dimensions) return closestMiaowuImageRatio(dimensions.width / dimensions.height);
+    if (value.includes(":")) {
+        const parsed = parseRatioValue(value);
+        return closestMiaowuImageRatio(parsed.width / parsed.height);
+    }
+    return "1:1";
+}
+
+function closestMiaowuImageRatio(target: number) {
+    return MIAOWU_IMAGE_RATIOS.reduce((best, item) => {
+        const [width, height] = item.split(":").map(Number);
+        const [bestWidth, bestHeight] = best.split(":").map(Number);
+        return Math.abs(width / height - target) < Math.abs(bestWidth / bestHeight - target) ? item : best;
+    });
+}
+
+function miaowuImageResolution(quality: string, size: string) {
+    const normalized = normalizeQuality(quality);
+    if (normalized === "high") return "4K";
+    if (normalized === "medium" || normalized === "hd") return "2K";
+    if (normalized === "low" || normalized === "standard") return "1080p";
+    const dimensions = parseImageDimensions(size.trim());
+    if (dimensions) {
+        const edge = Math.max(dimensions.width, dimensions.height);
+        if (edge >= 3000) return "4K";
+        if (edge >= 1800) return "2K";
+    }
+    return "1080p";
+}
+
+function unwrapMiaowuImageTask(payload: MiaowuImageEnvelope): MiaowuImageTask {
+    if (!payload) throw new Error(apiText("noImageTaskId"));
+    if (typeof payload === "object" && "code" in payload && payload.code !== undefined) {
+        if (payload.code !== 0 && payload.code !== "0") throw new Error(readApiErrorMessage(payload) || apiText("imageTaskCreateFailed"));
+        if (!payload.data) throw new Error(apiText("noImageTaskId"));
+        return payload.data;
+    }
+    if (typeof payload === "object" && "data" in payload && payload.data && typeof payload.data === "object") return payload.data;
+    return payload as MiaowuImageTask;
+}
+
+function miaowuImageError(task: MiaowuImageTask) {
+    return readApiErrorMessage(task.error) || apiText("imageGenerationFailed");
+}
+
+function delay(ms: number, signal?: AbortSignal) {
+    return new Promise<void>((resolve, reject) => {
+        if (signal?.aborted) {
+            reject(new DOMException("Aborted", "AbortError"));
+            return;
+        }
+        const timer = setTimeout(resolve, ms);
+        signal?.addEventListener(
+            "abort",
+            () => {
+                clearTimeout(timer);
+                reject(new DOMException("Aborted", "AbortError"));
+            },
+            { once: true },
+        );
+    });
+}
+
+async function blobToDataUrl(blob: Blob) {
+    return await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ""));
+        reader.onerror = () => reject(new Error(apiText("noImageReturned")));
+        reader.readAsDataURL(blob);
+    });
+}
+
+async function miaowuImageFromUrl(config: AiConfig, taskId: string, url: string | undefined, options?: RequestOptions) {
+    if (url) {
+        try {
+            const response = await axios.get<Blob>(fetchableMediaUrl(url), { responseType: "blob", signal: options?.signal });
+            return { id: nanoid(), dataUrl: await blobToDataUrl(response.data), taskId };
+        } catch (error) {
+            if (axios.isCancel(error) || options?.signal?.aborted) throw error;
+            try {
+                return { id: nanoid(), dataUrl: await blobToDataUrl(await fetchMiaowuTaskBlob(config, taskId, options?.signal)), taskId };
+            } catch {
+                return { id: nanoid(), dataUrl: url, taskId };
+            }
+        }
+    }
+    return { id: nanoid(), dataUrl: await blobToDataUrl(await fetchMiaowuTaskBlob(config, taskId, options?.signal)), taskId };
+}
+
+type DreamParamSchema = { type?: string; enum?: string[]; minItems?: number; maxItems?: number };
+type DreamRequestSchema = { properties?: { params?: { properties?: Record<string, DreamParamSchema>; required?: string[] } } };
+type DreamModelSchema = { type?: string; request_schema?: DreamRequestSchema };
+type DreamTask = MiaowuImageTask & { process?: string; result?: string[]; executionMode?: string };
+
+const dreamSchemaCache = new Map<string, DreamRequestSchema>();
+
+function dreamSchemaKey(config: Pick<AiConfig, "baseUrl" | "model">) {
+    return `${config.baseUrl.trim()}::${config.model}`;
+}
+
+function pickDreamEnum(value: string, enums?: string[]) {
+    if (!enums?.length) return value;
+    if (enums.includes(value)) return value;
+    return enums[0];
+}
+
+function miaowuDreamSize(quality: string, size: string, enums?: string[]) {
+    const wanted = miaowuImageResolution(quality, size);
+    if (!enums?.length || enums.includes(wanted)) return pickDreamEnum(wanted, enums);
+    const order = ["4K", "2K", "1080p", "720p"];
+    const start = Math.max(0, order.indexOf(wanted));
+    return order.slice(start).concat(order.slice(0, start)).find((item) => enums.includes(item)) || enums[0];
+}
+
+function miaowuDreamMode(schema: DreamRequestSchema | undefined, hasRefs: boolean) {
+    const params = schema?.properties?.params;
+    const enums = params?.properties?.mode?.enum || [];
+    const required = params?.required || [];
+    if (!enums.length && !required.includes("mode")) return undefined;
+    if (hasRefs && enums.includes("image-to-image")) return "image-to-image";
+    if (!hasRefs && enums.includes("text-to-image")) return "text-to-image";
+    if (enums.length === 1) return enums[0];
+    return hasRefs ? enums.find((item) => item.includes("image")) || enums[0] : enums.find((item) => item.includes("text")) || enums[0];
+}
+
+function unwrapDreamTask(payload: MiaowuImageEnvelope | { data?: DreamTask | null }): DreamTask {
+    const task = unwrapMiaowuImageTask(payload as MiaowuImageEnvelope) as DreamTask;
+    if (!task?.id) throw new Error(apiText("noImageTaskId"));
+    return task;
+}
+
+async function fetchMiaowuImageSchema(config: AiConfig, options?: RequestOptions) {
+    const cacheKey = dreamSchemaKey(config);
+    const cached = dreamSchemaCache.get(cacheKey);
+    if (cached) return cached;
+    const response = await axios.get<{ data?: DreamModelSchema; request_schema?: DreamRequestSchema }>(buildApiUrl(config.baseUrl, `/dream/model_schema?model=${encodeURIComponent(config.model)}`), {
+        headers: aiHeaders(config),
+        signal: options?.signal,
+    });
+    const schema = response.data?.data?.request_schema || response.data?.request_schema || {};
+    dreamSchemaCache.set(cacheKey, schema);
+    return schema;
+}
+
+function buildMiaowuDreamParams(schema: DreamRequestSchema, config: AiConfig, prompt: string, imageUrls: string[]) {
+    const properties = schema.properties?.params?.properties || {};
+    const params: Record<string, unknown> = {};
+    if (properties.prompt || !Object.keys(properties).length) params.prompt = withSystemPrompt(config, prompt);
+    if (properties.size) params.size = miaowuDreamSize(config.quality, config.size, properties.size.enum);
+    if (properties.ratio) params.ratio = pickDreamEnum(miaowuImageRatio(config.size), properties.ratio.enum);
+    const mode = miaowuDreamMode(schema, imageUrls.length > 0);
+    if (mode && properties.mode) params.mode = mode;
+    if (imageUrls.length && properties.image_urls) params.image_urls = imageUrls;
+    if (!params.prompt) params.prompt = withSystemPrompt(config, prompt);
+    return params;
+}
+
+function resolveMiaowuResultRef(config: AiConfig, ref: string) {
+    if (/^https?:\/\//i.test(ref)) return ref;
+    const origin = config.baseUrl.trim().replace(/\/+$/, "");
+    return withLocalProxy(`${origin}${ref.startsWith("/") ? ref : `/${ref}`}`);
+}
+
+async function miaowuImageFromRef(config: AiConfig, taskId: string, ref: string | undefined, options?: RequestOptions) {
+    if (!ref) return miaowuImageFromUrl(config, taskId, undefined, options);
+        const url = fetchableMediaUrl(resolveMiaowuResultRef(config, ref));
+    const headers = url.startsWith("/") || /^https?:\/\//i.test(ref) ? undefined : aiHeaders(config);
+        try {
+            const response = await axios.get<Blob>(url, { headers, responseType: "blob", signal: options?.signal });
+            return { id: nanoid(), dataUrl: await blobToDataUrl(response.data), taskId };
+    } catch (error) {
+        if (axios.isCancel(error) || options?.signal?.aborted) throw error;
+        try {
+            return { id: nanoid(), dataUrl: await blobToDataUrl(await fetchMiaowuTaskBlob(config, taskId, options?.signal)), taskId };
+        } catch {
+            if (/^https?:\/\//i.test(ref)) return { id: nanoid(), dataUrl: ref, taskId };
+            throw error;
+        }
+    }
+}
+
+export function miaowuTaskContentUrl(taskId: string) {
+    return `/__miaowu/v1/dream/tasks/${encodeURIComponent(taskId)}/content`;
+}
+
+export async function fetchMiaowuTaskBlob(config: Pick<AiConfig, "apiKey">, taskId: string, signal?: AbortSignal) {
+    const response = await axios.get<Blob>(miaowuTaskContentUrl(taskId), {
+        headers: { Authorization: `Bearer ${config.apiKey}` },
+        responseType: "blob",
+        signal,
+    });
+    const type = response.data.type || "";
+    if (!response.data.size || type.includes("json") || type.includes("text/html")) throw new Error(apiText("referenceUrlExpired"));
+    return response.data;
+}
+
+function isReferenceReadError(error: unknown) {
+    const message = error instanceof Error ? error.message : String(error || "");
+    return /参考素材读取失败|referenceUrlExpired|临时链接已失效/.test(message);
+}
+
+async function resolveMiaowuReferenceUrl(config: AiConfig, reference: ReferenceImage, options?: RequestOptions) {
+    const local = Boolean(reference.storageKey || reference.dataUrl?.startsWith("data:") || reference.dataUrl?.startsWith("blob:"));
+    if (local) {
+        return resolvePublicHttpUrl(reference, { signal: options?.signal, force: options?.forcePublicUpload || Boolean(reference.storageKey) });
+    }
+    if (reference.taskId) {
+        try {
+            const uploaded = await persistGeneratedImage(await fetchMiaowuTaskBlob(config, reference.taskId, options?.signal), { signal: options?.signal });
+            if (uploaded.publicUrl) return uploaded.publicUrl;
+            if (uploaded.storageKey) return resolvePublicHttpUrl({ storageKey: uploaded.storageKey, dataUrl: uploaded.url, name: reference.name, type: reference.type }, { signal: options?.signal });
+        } catch {
+            /* TOS result links expire; the content endpoint often only redirects to the same dead file. */
+        }
+    }
+    const remote = reference.dataUrl || reference.url || "";
+    if (isEphemeralMediaUrl(remote)) throw new Error(apiText("referenceUrlExpired"));
+    return resolvePublicHttpUrl({ ...reference, publicUrl: isEphemeralMediaUrl(reference.publicUrl) ? undefined : reference.publicUrl }, { signal: options?.signal, force: options?.forcePublicUpload });
+}
+
+async function createMiaowuImageTask(config: AiConfig, prompt: string, references: ReferenceImage[], options?: RequestOptions) {
+    const imageUrls = references.length ? await Promise.all(references.map((reference) => resolveMiaowuReferenceUrl(config, reference, options))) : [];
+    const schema = await fetchMiaowuImageSchema(config, options);
+    const created = unwrapDreamTask(
+        (
+            await axios.post<MiaowuImageEnvelope>(
+                aiApiUrl(config, "/dream/generate"),
+                { model: config.model, params: buildMiaowuDreamParams(schema, config, prompt, imageUrls) },
+                { headers: aiHeaders(config, "application/json"), signal: options?.signal },
+            )
+        ).data,
+    );
+    return created.id as string;
+}
+
+async function waitForMiaowuImageTask(config: AiConfig, taskId: string, options?: RequestOptions) {
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+        if (options?.signal?.aborted) throw new DOMException("Aborted", "AbortError");
+        const task = unwrapDreamTask((await axios.post<MiaowuImageEnvelope>(aiApiUrl(config, "/dream/query"), { id: taskId }, { headers: aiHeaders(config, "application/json"), signal: options?.signal })).data);
+        const status = (task.status || "").toUpperCase();
+        const refs = [task.result, task.url, task.result_url]
+            .flatMap((value) => (Array.isArray(value) ? value : value ? [value] : []))
+            .filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+        if (refs.length) return [await miaowuImageFromRef(config, taskId, refs[0], options)];
+        if (status === "SUCCESS" || status === "COMPLETED") return [await miaowuImageFromRef(config, taskId, undefined, options)];
+        if (status === "FAILURE" || status === "FAILED" || status === "CANCELLED") throw new Error(miaowuImageError(task));
+        if (attempt === 119) throw new Error(apiText("imageTimeout"));
+        await delay(2500, options?.signal);
+    }
+    throw new Error(apiText("imageTimeout"));
+}
+
+async function requestMiaowuImages(config: AiConfig, prompt: string, references: ReferenceImage[], count: number, options?: RequestOptions) {
+    const tasks = Array.from({ length: count }, async () => {
+        let taskId = "";
+        try {
+            taskId = await createMiaowuImageTask(config, prompt, references, options);
+            options?.onTaskCreated?.(taskId);
+            try {
+                const images = await waitForMiaowuImageTask(config, taskId, options);
+                return images.map((image) => ({ ...image, taskId }));
+            } catch (error) {
+                if (!references.length || options?.forcePublicUpload || !isReferenceReadError(error)) throw error;
+                taskId = await createMiaowuImageTask(config, prompt, references, { ...options, forcePublicUpload: true });
+                options?.onTaskCreated?.(taskId);
+                const images = await waitForMiaowuImageTask(config, taskId, options);
+                return images.map((image) => ({ ...image, taskId }));
+            }
+        } catch (error) {
+            throw new Error(readAxiosError(error, taskId ? apiText("imageGenerationFailed") : apiText("imageTaskCreateFailed")));
+        }
+    });
+    return (await Promise.all(tasks)).flat();
+}
+
+export async function requestGeneration(config: AiConfig, prompt: string, options?: RequestOptions): Promise<RequestedImage[]> {
     const requestConfig = resolveModelRequestConfig(config, config.model || config.imageModel);
     const n = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1)));
     const script = resolveModelScript(config, config.model || config.imageModel);
@@ -749,6 +1047,9 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
         } catch (error) {
             throw new Error(readAxiosError(error, apiText("requestFailed")));
         }
+    }
+    if (isMiaowuImageEndpoint(requestConfig)) {
+        return requestMiaowuImages(requestConfig, prompt, [], n, options);
     }
     const quality = normalizeQuality(config.quality);
     const requestSize = resolveRequestSize(quality, config.size);
@@ -779,7 +1080,7 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
     }
 }
 
-export async function requestEdit(config: AiConfig, prompt: string, references: ReferenceImage[], options?: RequestOptions) {
+export async function requestEdit(config: AiConfig, prompt: string, references: ReferenceImage[], options?: RequestOptions): Promise<RequestedImage[]> {
     const requestConfig = resolveModelRequestConfig(config, config.model || config.imageModel);
     const n = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1)));
     const requestPrompt = buildImageReferencePromptText(prompt, references);
@@ -788,7 +1089,7 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
         const quality = normalizeQuality(config.quality);
         const requestSize = resolveRequestSize(quality, config.size);
         const background = normalizeBackground(config.background);
-        const refs = await Promise.all(references.map((image) => imageToDataUrl(image)));
+        const refs = isMiaowuImageEndpoint(requestConfig) ? await resolvePublicHttpUrls(references, options) : await Promise.all(references.map((image) => imageToDataUrl(image)));
         try {
             const result = await runModelPlugin({
                 capability: "image",
@@ -810,6 +1111,9 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
         } catch (error) {
             throw new Error(readAxiosError(error, apiText("requestFailed")));
         }
+    }
+    if (isMiaowuImageEndpoint(requestConfig)) {
+        return requestMiaowuImages(requestConfig, prompt, references, n, options);
     }
 
     const quality = normalizeQuality(config.quality);
@@ -908,8 +1212,50 @@ export async function fetchImageModels(config: Pick<AiConfig, "baseUrl" | "apiKe
     }
 }
 
-export async function fetchChannelModels(channel: ModelChannel) {
-    return fetchImageModels({ baseUrl: channel.baseUrl, apiKey: channel.apiKey, apiFormat: channel.apiFormat });
+export type FetchedChannelModel = { name: string; capability: ModelCapability };
+
+type DreamModelListItem = {
+    id?: string;
+    name?: string;
+    display_name?: string;
+    type?: string;
+};
+
+function capabilityFromDreamType(type: string | undefined, name: string): ModelCapability {
+    const value = (type || "").trim().toLowerCase();
+    if (value === "image" || value === "video" || value === "audio" || value === "text") return value;
+    return guessCapability(name);
+}
+
+function parseDreamModelList(payload: { data?: DreamModelListItem[] } | undefined): FetchedChannelModel[] {
+    const seen = new Set<string>();
+    const models: FetchedChannelModel[] = [];
+    for (const item of payload?.data || []) {
+        const name = (item.id || item.name || item.display_name || "").trim();
+        if (!name || seen.has(name)) continue;
+        seen.add(name);
+        models.push({ name, capability: capabilityFromDreamType(item.type, name) });
+    }
+    return models.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+async function fetchMiaowuDreamModels(channel: ModelChannel): Promise<FetchedChannelModel[]> {
+    try {
+        const response = await axios.get<{ data?: DreamModelListItem[]; error?: { message?: string } }>(buildApiUrl(channel.baseUrl, "/dream/model_list"), {
+            headers: { Authorization: `Bearer ${channel.apiKey}` },
+        });
+        const models = parseDreamModelList(response.data);
+        if (!models.length) throw new Error(apiText("modelReadFailed"));
+        return models;
+    } catch (error) {
+        throw new Error(readAxiosError(error, apiText("modelReadFailed")));
+    }
+}
+
+export async function fetchChannelModels(channel: ModelChannel): Promise<FetchedChannelModel[]> {
+    if (isBuiltInChannel(channel)) return fetchMiaowuDreamModels(channel);
+    const names = await fetchImageModels({ baseUrl: channel.baseUrl, apiKey: channel.apiKey, apiFormat: channel.apiFormat });
+    return names.map((name) => ({ name, capability: guessCapability(name) }));
 }
 
 const defaultGeminiConfig: Pick<AiConfig, "baseUrl" | "apiKey" | "apiFormat" | "model" | "systemPrompt"> = {

@@ -22,6 +22,7 @@ export type ModelChannel = {
     apiKey: string;
     apiFormat: ApiCallFormat;
     models: ChannelModel[];
+    builtIn?: boolean;
 };
 
 export type AiConfig = {
@@ -74,6 +75,8 @@ export const CONFIG_STORE_KEY = "infinite-canvas:ai_config_store";
 const CHANNEL_MODEL_SEPARATOR = "::";
 const OPENAI_BASE_URL = "https://api.openai.com";
 const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com";
+export const MIAOWU_CHANNEL_ID = "miaowu";
+export const MIAOWU_BASE_URL = "https://api.miaowuai.store";
 export const LOCAL_PROXY_PACKAGE = "@basketikun/canvas-proxy";
 export const DEFAULT_LOCAL_PROXY_URL = "http://127.0.0.1:23210";
 
@@ -83,6 +86,15 @@ export const defaultConfig: AiConfig = {
     apiKey: "",
     apiFormat: "openai",
     channels: [
+        {
+            id: MIAOWU_CHANNEL_ID,
+            name: i18n.t("config.channels.miaowuName"),
+            baseUrl: MIAOWU_BASE_URL,
+            apiKey: "",
+            apiFormat: "openai",
+            builtIn: true,
+            models: [],
+        },
         {
             id: "default",
             name: i18n.t("config.channels.defaultName"),
@@ -146,13 +158,13 @@ type ConfigStore = {
     clearPromptContinue: () => void;
 };
 
-const VIDEO_KEYWORDS = ["video", "sora", "veo", "kling", "wan", "hailuo"];
+const VIDEO_KEYWORDS = ["video", "vedio", "sora", "veo", "kling", "wan2", "wan3", "wanx", "hailuo", "seedance", "dreamina", "jimeng"];
 
 export function boolConfig(value: string, fallback: boolean) {
     return value ? value === "true" : fallback;
 }
 const AUDIO_KEYWORDS = ["audio", "tts", "speech", "voice", "music", "sound"];
-const IMAGE_KEYWORDS = ["seedream", "gpt-image", "image", "dall-e", "dalle", "imagen", "flux", "sdxl", "stable-diffusion", "midjourney"];
+const IMAGE_KEYWORDS = ["seedream", "gpt-image", "image", "dall-e", "dalle", "imagen", "flux", "sdxl", "stable-diffusion", "midjourney", "nano-banana", "niji", "mjv"];
 
 /** Best-effort default capability for a freshly fetched model name; user can override in the channel editor. */
 export function guessCapability(name: string): ModelCapability {
@@ -215,7 +227,7 @@ export const useConfigStore = create<ConfigStore>()(
                 set((state) => ({
                     config: {
                         ...state.config,
-                        [key]: value,
+                        [key]: key === "channels" ? ensureMiaowuChannel(value as ModelChannel[]) : value,
                     },
                 })),
             importChannelCredentials: (input) => {
@@ -309,7 +321,38 @@ export function createModelChannel(channel?: Partial<ModelChannel>): ModelChanne
         apiKey: channel?.apiKey || "",
         apiFormat,
         models: normalizeChannelModels(channel?.models),
+        builtIn: Boolean(channel?.builtIn),
     };
+}
+
+export function isBuiltInChannel(channel: Pick<ModelChannel, "id" | "builtIn" | "baseUrl">) {
+    return channel.builtIn || channel.id === MIAOWU_CHANNEL_ID || normalizedBaseUrlKey(channel.baseUrl) === normalizedBaseUrlKey(MIAOWU_BASE_URL);
+}
+
+export function createMiaowuChannel(overrides?: Partial<ModelChannel>): ModelChannel {
+    return createModelChannel({
+        id: MIAOWU_CHANNEL_ID,
+        name: i18n.t("config.channels.miaowuName"),
+        baseUrl: MIAOWU_BASE_URL,
+        apiFormat: "openai",
+        builtIn: true,
+        apiKey: overrides?.apiKey || "",
+        models: overrides?.models,
+    });
+}
+
+export function ensureMiaowuChannel(channels: ModelChannel[]) {
+    let inherited: Partial<ModelChannel> | undefined;
+    const others: ModelChannel[] = [];
+    for (const channel of channels) {
+        if (isBuiltInChannel(channel)) inherited = { apiKey: channel.apiKey, models: channel.models };
+        else others.push(channel);
+    }
+    return [createMiaowuChannel(inherited), ...others];
+}
+
+export function lockBuiltInChannel(channel: ModelChannel) {
+    return isBuiltInChannel(channel) ? createMiaowuChannel({ apiKey: channel.apiKey, models: channel.models }) : channel;
 }
 
 export function upsertChannelCredentials(
@@ -457,7 +500,7 @@ function normalizeChannels(config: AiConfig) {
             }),
         );
     }
-    return channels;
+    return ensureMiaowuChannel(channels);
 }
 
 export function defaultBaseUrlForApiFormat(apiFormat: ApiCallFormat) {

@@ -4,14 +4,15 @@ import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { fetchChannelModels } from "@/services/api/image";
-import type { ModelChannel } from "@/stores/use-config-store";
+import { isBuiltInChannel, type ModelCapability, type ModelChannel } from "@/stores/use-config-store";
 
 // Channel model selector: fetch upstream models or add them manually, then include checked models in the channel list.
-export function ModelSelectModal({ open, channel, selectedNames, onConfirm, onClose }: { open: boolean; channel: ModelChannel | null; selectedNames: string[]; onConfirm: (names: string[]) => void; onClose: () => void }) {
+export function ModelSelectModal({ open, channel, selectedNames, onConfirm, onClose }: { open: boolean; channel: ModelChannel | null; selectedNames: string[]; onConfirm: (names: string[], fetchedCaps?: Record<string, ModelCapability>) => void; onClose: () => void }) {
     const { message } = App.useApp();
     const { t } = useTranslation();
     const [existing, setExisting] = useState<string[]>([]);
     const [fetched, setFetched] = useState<string[]>([]);
+    const [fetchedCaps, setFetchedCaps] = useState<Record<string, ModelCapability>>({});
     const [selected, setSelected] = useState<Set<string>>(new Set());
     const [activeTab, setActiveTab] = useState("new");
     const [search, setSearch] = useState("");
@@ -22,6 +23,7 @@ export function ModelSelectModal({ open, channel, selectedNames, onConfirm, onCl
         if (!open) return;
         setExisting(selectedNames);
         setFetched([]);
+        setFetchedCaps({});
         setSelected(new Set(selectedNames));
         setActiveTab(selectedNames.length ? "existing" : "new");
         setSearch("");
@@ -68,9 +70,12 @@ export function ModelSelectModal({ open, channel, selectedNames, onConfirm, onCl
         setLoading(true);
         try {
             const models = await fetchChannelModels(channel);
-            setFetched(models);
+            const names = models.map((model) => model.name);
+            setFetched(names);
+            setFetchedCaps(Object.fromEntries(models.map((model) => [model.name, model.capability])));
             setActiveTab("new");
-            message.success(t("config.modelSelect.fetched", { count: models.length }));
+            if (isBuiltInChannel(channel)) setSelected(new Set(names));
+            message.success(t("config.modelSelect.fetched", { count: names.length }));
         } catch (error) {
             message.error(error instanceof Error ? error.message : t("config.modelSelect.fetchFailed"));
         } finally {
@@ -80,7 +85,7 @@ export function ModelSelectModal({ open, channel, selectedNames, onConfirm, onCl
 
     const confirm = () => {
         const ordered = [...existing, ...fetched].filter((name, index, list) => list.indexOf(name) === index).filter((name) => selected.has(name));
-        onConfirm(ordered);
+        onConfirm(ordered, fetchedCaps);
         onClose();
     };
 
